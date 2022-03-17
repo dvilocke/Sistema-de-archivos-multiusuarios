@@ -1,14 +1,13 @@
 import zmq
 import random
-
+import os
 from file import *
 
 class Server:
     context = zmq.Context()
     socket = context.socket(zmq.REP)
 
-    list_of_id = []
-    db_files = []
+    db_users = {}
 
     def __init__(self, url):
         self.socket.bind(url)
@@ -16,44 +15,55 @@ class Server:
     def generate_identifier(self) ->  int:
         while True:
             new_id = random.randint(0,100)
-            if new_id not in self.list_of_id:
-                self.list_of_id.append(new_id)
+            if new_id not in self.db_users:
+                self.db_users[new_id] = []
                 break
         return new_id
 
-    def get_file(self, id_received: int):
-        #function to obtain the corresponding file of each users
-        for file in self.db_files:
-            if id_received == file.id_user:
+    def check_existence(self, id_received:int, filename : str):
+        for file in self.db_users[id_received]:
+            if file.file_name == filename:
                 return file
+        return None
 
-    def save_bd(self, id_user, file_name, size):
-        rename_file_name = str(id_user) + '_' + file_name
-        file = File(id_user, file_name, size, rename_file_name)
-        self.db_files.append(file)
 
     def listen_requests(self):
         while True:
             content = self.socket.recv_multipart()
-            if content[4].decode() == '0':
+            if content[5].decode() == '0':
                 #is requesting an identifier
                 new_id = self.generate_identifier()
-                self.save_bd(new_id, content[1].decode(), content[2].decode())
                 self.socket.send_string(str(new_id))
                 continue
             else:
                 #already have an identifier and everything is already saved
-                new_file : File = self.get_file(int(content[3].decode()))
+                new_file : File = self.check_existence(int(content[4].decode()), content[1].decode())
+                if new_file is None:
+                    #the file is new
+                    file = File(int(content[4].decode()), content[1].decode(), int(content[2].decode()))
+                    self.db_users[int(content[4].decode())].append(file)
+                    new_file = self.check_existence(int(content[4].decode()), content[1].decode())
+                else:
+                    if new_file.full:
+                        #if the file is full it means it is an overwrite
+                        new_file.reset_values()
+                        new_file.size = int(content[2].decode())
+                        os.remove(new_file.rename_file)
+                        print(f'{new_file.id_user}, is overwriting the file:{new_file.file_name}')
+
+
                 with open(new_file.rename_file, 'ab') as f:
                     f.write(content[0])
                     new_file.amount_saved += len(content[0])
                     if int(new_file.size) == new_file.amount_saved:
                         new_file.full = True
-                        msg = f'your file{new_file.file_name} is uploaded to the server'
+                        msg = f'your file{new_file.file_name} is uploaded to the server, size up:{new_file.amount_saved} bytes'
                         self.socket.send_string(msg)
                     else:
                         msg = f'your file{new_file.file_name} is not uploaded yet, size up:{new_file.amount_saved} bytes'
+                        new_file.full = False
                         self.socket.send_string(msg)
+
             print(f'{new_file.id_user}, archive:{new_file.file_name}, file weight:{new_file.size}, '
                   f'size uploaded to server:{new_file.amount_saved}')
 
